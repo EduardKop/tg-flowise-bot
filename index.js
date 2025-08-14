@@ -3,7 +3,6 @@ import express from 'express';
 import { Telegraf } from 'telegraf';
 import axios from 'axios';
 
-// --- env & normalization ---
 const {
   BOT_TOKEN,
   PUBLIC_URL,
@@ -13,11 +12,7 @@ const {
   FLOWISE_API_KEY
 } = process.env;
 
-// Railway задаёт свой порт в process.env.PORT.
-// Локально подставим 8080, если переменная не задана.
 const PORT = Number(process.env.PORT) || 8080;
-
-// Уберём завершающие слэши, чтобы не получить двойной //
 const CLEAN_PUBLIC_URL = (PUBLIC_URL || '').replace(/\/+$/, '');
 const CLEAN_FLOWISE_BASE_URL = (FLOWISE_BASE_URL || '').replace(/\/+$/, '');
 
@@ -25,27 +20,28 @@ if (!BOT_TOKEN) throw new Error('BOT_TOKEN is required');
 if (!CLEAN_FLOWISE_BASE_URL || !FLOWISE_FLOW_ID) {
   throw new Error('FLOWISE_BASE_URL and FLOWISE_FLOW_ID are required');
 }
-if (!CLEAN_PUBLIC_URL) {
-  console.warn('PUBLIC_URL is not set yet. Set it in Railway env after first deploy.');
-}
 
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
-// Telegram will POST updates here:
+// Health endpoints (для Railway health-check)
+app.get('/', (_, res) => res.status(200).send('OK'));
+app.get('/healthz', (_, res) => res.status(200).send('OK'));
+
+// Webhook endpoint
 const webhookPath = `/telegraf/${WEBHOOK_SECRET}`;
 app.use(express.json());
 app.use(bot.webhookCallback(webhookPath));
 
-// Simple /start
+// /start
 bot.start(async (ctx) => {
   await ctx.reply('Привіт! Пиши повідомлення — переправлю його до Flowise ✨');
 });
 
-// Forward every text message to Flowise Prediction API
+// Проксируем текст в Flowise
 bot.on('text', async (ctx) => {
   const text = ctx.message?.text ?? '';
-  const userId = String(ctx.chat.id); // stable per chat, good as sessionId
+  const userId = String(ctx.chat.id);
   try {
     const url = `${CLEAN_FLOWISE_BASE_URL}/prediction/${FLOWISE_FLOW_ID}`;
     const headers = { 'Content-Type': 'application/json' };
@@ -53,7 +49,6 @@ bot.on('text', async (ctx) => {
 
     const payload = {
       question: text,
-      // keep context per user (Flowise accepts sessionId and optional history)
       overrideConfig: { sessionId: userId },
       streaming: false
     };
@@ -62,18 +57,17 @@ bot.on('text', async (ctx) => {
     const answer = data?.text ?? '🤖 (порожня відповідь)';
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
-    const msg = err?.response?.data || err.message;
-    console.error('Flowise error:', msg);
+    console.error('Flowise error:', err?.response?.data || err.message);
     await ctx.reply('Ой, сталася помилка під час звернення до Flowise 🙈');
   }
 });
 
-// Health-check
-app.get('/', (_, res) => res.send('OK'));
-
-// Boot: set webhook & start server
 let server;
 async function boot() {
+  // 1) стартуем HTTP-сервер (пусть health-check сразу видит 200 на /)
+  server = app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
+
+  // 2) регистрируем вебхук, когда сервер уже слушает порт
   if (CLEAN_PUBLIC_URL) {
     const fullWebhook = `${CLEAN_PUBLIC_URL}${webhookPath}`;
     await bot.telegram.setWebhook(fullWebhook);
@@ -81,10 +75,9 @@ async function boot() {
   } else {
     console.log('PUBLIC_URL not set yet. Set it in Railway env and restart to register webhook.');
   }
-  server = app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
 }
 
-// Graceful shutdown (Railway посылает SIGTERM)
+// Graceful shutdown
 function shutdown(signal) {
   console.log(`${signal} received, closing server...`);
   if (server) {
