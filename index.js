@@ -90,7 +90,11 @@ bot.on('text', async (ctx) => {
     });
 
     const answer = extractAnswer(data);
-    await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
+    await ctx.reply(answer, {
+  parse_mode: 'HTML',
+  disable_web_page_preview: false,
+  reply_to_message_id: ctx.message.message_id
+});
 
   } catch (err) {
     const status = err?.response?.status;
