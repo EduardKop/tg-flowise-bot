@@ -135,6 +135,7 @@ bot.on('text', async (ctx) => {
     // DEBUG: повна відповідь
     console.log('LF raw response <-');
     console.dir(data, { depth: null });
+console.log('Langflow raw response:', JSON.stringify(data, null, 2));
 
     const answer = extractAnswer(data, LANGFLOW_OUTPUT_COMPONENT);
 
