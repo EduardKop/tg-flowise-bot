@@ -7,9 +7,9 @@ const {
   BOT_TOKEN,
   PUBLIC_URL,
   WEBHOOK_SECRET = 'secret',
-  LANGFLOW_BASE_URL,   // базовый URL твоего Langflow на Railway (без завершающего /)
-  LANGFLOW_FLOW_ID,    // Flow ID или alias из Share → API Access
-  LANGFLOW_API_KEY     // API key, если включена авторизация в Langflow
+  LANGFLOW_BASE_URL,   // <-- базовый URL твоего Langflow на Railway
+  LANGFLOW_FLOW_ID,    // <-- ID/alias flow (из Share → API access)
+  LANGFLOW_API_KEY     // <-- API key, если включена аутентификация
 } = process.env;
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -30,7 +30,7 @@ app.get('/healthz', (_, res) => res.status(200).send('OK'));
 
 // Webhook endpoint
 const webhookPath = `/telegraf/${WEBHOOK_SECRET}`;
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json());
 app.use(bot.webhookCallback(webhookPath));
 
 // /start
@@ -41,13 +41,10 @@ bot.start(async (ctx) => {
 // Достаём текст из ответа Langflow
 function extractAnswer(data) {
   try {
-    const outputs = data?.outputs?.[0]?.outputs;
+    const outputs = data && data.outputs && data.outputs[0] && data.outputs[0].outputs;
     if (Array.isArray(outputs)) {
       for (const o of outputs) {
-        const msg =
-          o?.results?.message?.text ??
-          o?.results?.text ??
-          null;
+        const msg = (o && o.results && (o.results.message && o.results.message.text)) || (o && o.results && o.results.text);
         if (typeof msg === 'string' && msg.trim()) return msg;
       }
     }
@@ -61,61 +58,30 @@ bot.on('text', async (ctx) => {
   const text = ctx.message?.text ?? '';
   const userId = String(ctx.chat.id);
 
-  // маленький UX: показать "typing…"
-  try { await ctx.sendChatAction('typing'); } catch {}
-
   try {
     const url = `${CLEAN_LANGFLOW_BASE_URL}/api/v1/run/${encodeURIComponent(LANGFLOW_FLOW_ID)}`;
 
     const headers = {
       'Content-Type': 'application/json',
       'accept': 'application/json',
-      ...(LANGFLOW_API_KEY ? { 'x-api-key': LANGFLOW_API_KEY } : {})
     };
+    if (LANGFLOW_API_KEY) headers['x-api-key'] = LANGFLOW_API_KEY;
 
     const payload = {
       input_value: text,
       session_id: userId,   // чтобы удерживать контекст по чату
       input_type: 'chat',
       output_type: 'chat'
-      // output_component: 'ChatOutput', // раскомментируй при необходимости
-      // tweaks: {}
+      // output_component: 'ChatOutput', // укажи явно, если требуется конкретный output-компонент
+      // tweaks: {}                      // сюда можно передавать настройки узлов
     };
 
-    const { data } = await axios.post(url, payload, {
-      headers,
-      timeout: 30000,         // 30s таймаут на запрос
-      maxContentLength: 10_000_000,
-      maxBodyLength: 10_000_000
-    });
-
+    const { data } = await axios.post(url, payload, { headers });
     const answer = extractAnswer(data);
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
 
   } catch (err) {
-    const status = err?.response?.status;
-    const body = err?.response?.data;
-
-    console.error('Langflow error:', {
-      status,
-      body: typeof body === 'object' ? JSON.stringify(body) : body,
-      message: err?.message
-    });
-
-    // чуть более полезные сообщения для распространённых статусов
-    if (status === 401 || status === 403) {
-      await ctx.reply('⛔️ Немає доступу до Langflow API. Перевір API key (LANGFLOW_API_KEY) або налаштування доступу.');
-      return;
-    }
-    if (status === 404) {
-      await ctx.reply('🔎 Flow не знайдено. Перевір LANGFLOW_FLOW_ID або URL Langflow.');
-      return;
-    }
-    if (status === 413) {
-      await ctx.reply('📦 Повідомлення занадто велике. Спробуй надіслати коротший текст.');
-      return;
-    }
-
+    console.error('Langflow error:', err?.response?.data || err.message);
     await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈');
   }
 });
@@ -133,7 +99,6 @@ async function boot() {
   }
 }
 
-// Graceful shutdown
 function shutdown(signal) {
   console.log(`${signal} received, closing server...`);
   if (server) {
