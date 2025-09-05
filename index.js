@@ -36,19 +36,19 @@ app.use(bot.webhookCallback(webhookPath));
 // /start
 bot.start(async (ctx) => {
   await ctx.reply(
-    'Привіт! Щоб я відповідав, пиши повідомлення, що ПОЧИНАЄТЬСЯ зі слова "Чат" або "Кріш".\nНапр.: "Кріш як твій настрій" або "чат, підкажи...".'
+    'Привет! Чтобы я отвечал, начинай сообщение со слова "Чат" или "Кріш".\nНапр.: "Кріш как твой настрой" или "чат, подскажи...".'
   );
 });
 
-// Дістаємо текст з відповіді Langflow
-function extractAnswer(data: any) {
+// Достаём текст из ответа Langflow
+function extractAnswer(data) {
   try {
-    const outputs = data && data.outputs && data.outputs[0] && data.outputs[0].outputs;
+    const outputs = data?.outputs?.[0]?.outputs;
     if (Array.isArray(outputs)) {
       for (const o of outputs) {
         const msg =
-          (o && o.results && (o.results.message && o.results.message.text)) ||
-          (o && o.results && o.results.text);
+          o?.results?.message?.text ??
+          o?.results?.text;
         if (typeof msg === 'string' && msg.trim()) return msg;
       }
     }
@@ -59,24 +59,23 @@ function extractAnswer(data: any) {
 
 /**
  * ТРИГЕР:
- *   — Спрацьовує лише якщо повідомлення ПОЧИНАЄТЬСЯ на "Чат" або "Кріш" (будь-який регістр).
- *   — Видаляємо тригер + розділові символи після нього та зайві пробіли.
- *   — Якщо тригера немає — НІЧОГО не робимо (бот мовчить).
+ * — Срабатывает ТОЛЬКО если сообщение НАЧИНАЕТСЯ со слова "Чат" или "Кріш" (любая раскладка/регистр).
+ * — Удаляем триггер + разделители после него и пробелы.
+ * — Если триггера нет — бот молчит.
  */
 const TRIGGER_RE = /^\s*(чат|кріш)\b[\s,:-]*/iu;
 
-// Проксуюємо текст у Langflow лише якщо є тригер
 bot.on('text', async (ctx) => {
   const raw = ctx.message?.text ?? '';
   const match = raw.match(TRIGGER_RE);
 
-  // Немає тригера — ігноруємо повідомлення
+  // нет триггера — игнорим
   if (!match) return;
 
-  // Прибираємо "Чат"/"Кріш" + розділові символи, лишаємо лише корисну частину
+  // вырезаем "Чат"/"Кріш" и разделители
   const cleaned = raw.replace(TRIGGER_RE, '').trim();
 
-  // Якщо після видалення тригера нічого не лишилось — теж мовчимо
+  // пусто после вырезания — тоже молчим
   if (!cleaned) return;
 
   const userId = String(ctx.chat.id);
@@ -84,31 +83,29 @@ bot.on('text', async (ctx) => {
   try {
     const url = `${CLEAN_LANGFLOW_BASE_URL}/api/v1/run/${encodeURIComponent(LANGFLOW_FLOW_ID)}`;
 
-    const headers: Record<string, string> = {
+    const headers = {
       'Content-Type': 'application/json',
       accept: 'application/json',
     };
     if (LANGFLOW_API_KEY) headers['x-api-key'] = LANGFLOW_API_KEY;
 
     const payload = {
-      input_value: cleaned,     // <-- у промпт іде лише текст БЕЗ "Чат/Кріш"
-      session_id: userId,       // щоб утримувати контекст по чату
+      input_value: cleaned,   // <-- в Langflow уходит только текст без "Чат/Кріш"
+      session_id: userId,
       input_type: 'chat',
-      output_type: 'chat',
-      // output_component: 'ChatOutput',
-      // tweaks: {}
+      output_type: 'chat'
     };
 
     const { data } = await axios.post(url, payload, { headers });
     const answer = extractAnswer(data);
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
-  } catch (err: any) {
+  } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message);
     await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈');
   }
 });
 
-let server: any;
+let server;
 async function boot() {
   server = app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
 
@@ -117,13 +114,11 @@ async function boot() {
     await bot.telegram.setWebhook(fullWebhook);
     console.log('Webhook set ->', fullWebhook);
   } else {
-    console.log(
-      'PUBLIC_URL not set yet. Set it in Railway env and restart to register webhook.'
-    );
+    console.log('PUBLIC_URL not set yet. Set it in Railway env and restart to register webhook.');
   }
 }
 
-function shutdown(signal: string) {
+function shutdown(signal) {
   console.log(`${signal} received, closing server...`);
   if (server) {
     server.close(() => {
