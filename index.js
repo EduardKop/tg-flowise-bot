@@ -26,7 +26,7 @@ if (!CLEAN_PUBLIC_URL) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
-// важливо: відповідаємо звичайним sendMessage, а не через webhook HTTP-відповідь
+// Відповідаємо через sendMessage, а не webhook HTTP-відповідь
 bot.telegram.webhookReply = false;
 
 const app = express();
@@ -35,10 +35,15 @@ const app = express();
 app.get('/', (_, res) => res.status(200).send('OK'));
 app.get('/healthz', (_, res) => res.status(200).send('OK'));
 
-// Webhook endpoint (шлях має збігатися з setWebhook)
+// --- Власний webhook-роут: повертаємо 200 ОДРАЗУ, обробку запускаємо асинхронно
 const webhookPath = `/telegraf/${WEBHOOK_SECRET}`;
-app.use(express.json());
-app.use(bot.webhookCallback(webhookPath));
+app.post(webhookPath, express.json(), (req, res) => {
+  res.sendStatus(200); // миттєво
+  // обробляємо апдейт паралельно
+  Promise.resolve(bot.handleUpdate(req.body)).catch((e) =>
+    console.error('handleUpdate error:', e)
+  );
+});
 
 // Логи апдейтів
 bot.use(async (ctx, next) => {
@@ -73,16 +78,16 @@ function extractAnswer(data) {
   return '🤖 (порожня відповідь)';
 }
 
-// Тригер (ЮНІКОД, без \b): рядок ПОЧИНАЄТЬСЯ з "чат"/"кріш", далі пробіл/пунктуація або кінець рядка
+// Тригер (ЮНІКОД, без \b): початок рядка "чат"/"кріш"
 const TRIGGER_RE = /^\s*(?:чат|кріш)(?=[\s,.:;!?-]|$)/iu;
 
-// Захист від конкурентних запитів (на рівні чату)
-const busyByChat = new Map(); // chatId -> boolean
+// Захист від конкурентних запитів на рівні чату
+const busyByChat = new Map(); // chatId -> true/false
+const BUSY_RESET_MS = 120_000; // авто-скидання на випадок зависань
 
-// Тест-хендлер
+// Тест
 bot.on(message('text'), async (ctx, next) => {
-  const text = ctx.message.text || '';
-  if (text === 'f') {
+  if ((ctx.message.text || '') === 'f') {
     console.log('TEST hears f -> OK');
     await ctx.reply('OK (f)');
     return;
@@ -90,15 +95,13 @@ bot.on(message('text'), async (ctx, next) => {
   return next();
 });
 
-// Основний хендлер (тільки текст)
+// Основний хендлер
 bot.on(message('text'), async (ctx) => {
   const chatId = String(ctx.chat.id);
   const raw = ctx.message.text || '';
 
-  const match = raw.match(TRIGGER_RE);
-  if (!match) return; // не тригер — ігноруємо
+  if (!TRIGGER_RE.test(raw)) return;
 
-  // Прибираємо слово-тригер, а потім розділювачі/пробіли після нього
   const cleaned = raw
     .replace(TRIGGER_RE, '')
     .replace(/^[\s,.:;!?-]+/, '')
@@ -114,8 +117,10 @@ bot.on(message('text'), async (ctx) => {
     return;
   }
 
+  let resetTimer;
   try {
     busyByChat.set(chatId, true);
+    resetTimer = setTimeout(() => busyByChat.set(chatId, false), BUSY_RESET_MS);
 
     const url = `${CLEAN_LANGFLOW_BASE_URL}/api/v1/run/${encodeURIComponent(LANGFLOW_FLOW_ID)}`;
     const headers = {
@@ -125,8 +130,8 @@ bot.on(message('text'), async (ctx) => {
     };
 
     const payload = {
-      input_value: cleaned,       // без "Чат/Кріш"
-      session_id: chatId,         // контекст по чату/групі
+      input_value: cleaned,   // без "Чат/Кріш"
+      session_id: chatId,     // контекст по чату/групі
       input_type: 'chat',
       output_type: 'chat',
       // tweaks: { "SystemMessage": { "content": "Відповідай українською, не представляйся Кріштіану Роналду..." } }
@@ -141,6 +146,7 @@ bot.on(message('text'), async (ctx) => {
       reply_to_message_id: ctx.message.message_id
     });
   } finally {
+    if (resetTimer) clearTimeout(resetTimer);
     busyByChat.set(chatId, false);
   }
 });
