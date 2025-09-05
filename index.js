@@ -24,7 +24,7 @@ if (!CLEAN_LANGFLOW_BASE_URL || !LANGFLOW_FLOW_ID) {
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
-// Health endpoints (для Railway health-check)
+// Health endpoints
 app.get('/', (_, res) => res.status(200).send('OK'));
 app.get('/healthz', (_, res) => res.status(200).send('OK'));
 
@@ -57,31 +57,28 @@ function extractAnswer(data) {
   return '🤖 (порожня відповідь)';
 }
 
-/**
- * ТРИГЕР:
- * — Срабатывает ТОЛЬКО если сообщение НАЧИНАЕТСЯ со слова "Чат" или "Кріш" (любая раскладка/регистр).
- * — Удаляем триггер + разделители после него и пробелы.
- * — Если триггера нет — бот молчит.
- */
+// Регулярка для тригера
 const TRIGGER_RE = /^\s*(чат|кріш)\b[\s,:-]*/iu;
 
-bot.on('text', async (ctx) => {
+// прапор "зайнятий" на рівні всього бота
+let isBusy = false;
+
+// Бот реагує тільки на повідомлення, які починаються з "Чат"/"Кріш"
+bot.hears(TRIGGER_RE, async (ctx) => {
+  if (isBusy) {
+    await ctx.reply('⚠️ Я зайнятий, вже відповідаю іншому. Спробуй трохи пізніше 🙏');
+    return;
+  }
+
   const raw = ctx.message?.text ?? '';
-  const match = raw.match(TRIGGER_RE);
-
-  // нет триггера — игнорим
-  if (!match) return;
-
-  // вырезаем "Чат"/"Кріш" и разделители
   const cleaned = raw.replace(TRIGGER_RE, '').trim();
-
-  // пусто после вырезания — тоже молчим
   if (!cleaned) return;
 
   const userId = String(ctx.chat.id);
 
-  
   try {
+    isBusy = true; // ставимо прапор
+
     const url = `${CLEAN_LANGFLOW_BASE_URL}/api/v1/run/${encodeURIComponent(LANGFLOW_FLOW_ID)}`;
 
     const headers = {
@@ -91,7 +88,7 @@ bot.on('text', async (ctx) => {
     if (LANGFLOW_API_KEY) headers['x-api-key'] = LANGFLOW_API_KEY;
 
     const payload = {
-      input_value: cleaned,   // <-- в Langflow уходит только текст без "Чат/Кріш"
+      input_value: cleaned,
       session_id: userId,
       input_type: 'chat',
       output_type: 'chat'
@@ -99,10 +96,13 @@ bot.on('text', async (ctx) => {
 
     const { data } = await axios.post(url, payload, { headers });
     const answer = extractAnswer(data);
+
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message);
     await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈');
+  } finally {
+    isBusy = false; // звільняємо бота
   }
 });
 
