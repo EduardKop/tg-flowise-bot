@@ -132,6 +132,7 @@ function shutdown(signal) {
     process.exit(0);
   }
 }
+
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
