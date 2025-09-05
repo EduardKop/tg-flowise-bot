@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { Telegraf } from 'telegraf';
+import { message } from 'telegraf/filters';
 import axios from 'axios';
 
 const {
@@ -25,18 +26,21 @@ if (!CLEAN_PUBLIC_URL) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+// ВАЖЛИВО: вимикаємо "webhook reply", щоб відповідати через sendMessage
+bot.telegram.webhookReply = false;
+
 const app = express();
 
-// ---- Health for Railway
+// ---- Health (для Railway)
 app.get('/', (_, res) => res.status(200).send('OK'));
 app.get('/healthz', (_, res) => res.status(200).send('OK'));
 
-// ---- Webhook endpoint (must match setWebhook URL)
+// ---- Webhook endpoint (шлях має збігатися з setWebhook)
 const webhookPath = `/telegraf/${WEBHOOK_SECRET}`;
 app.use(express.json());
 app.use(bot.webhookCallback(webhookPath));
 
-// ---- Debug logging (helpful on Railway logs)
+// ---- Логування апдейтів
 bot.use(async (ctx, next) => {
   const txt = ctx.update?.message?.text;
   console.log('update:', ctx.updateType, txt || '');
@@ -54,7 +58,7 @@ bot.start(async (ctx) => {
   );
 });
 
-// ---- Langflow answer extractor
+// ---- Дістаємо текст з відповіді Langflow
 function extractAnswer(data) {
   try {
     const outputs = data?.outputs?.[0]?.outputs;
@@ -69,30 +73,49 @@ function extractAnswer(data) {
   return '🤖 (порожня відповідь)';
 }
 
-// ---- Trigger: only "Чат"/"Кріш" at the start
+// ---- Тригер: ПОЧАТОК рядка "чат"/"кріш" (без регістру)
 const TRIGGER_RE = /^\s*(чат|кріш)\b[\s,:-]*/iu;
 
-// ---- Per-chat busy guard
+// ---- Захист від конкурентних запитів (на рівні чату)
 const busyByChat = new Map(); // chatId -> boolean
 
-// ---- Simple test trigger
-bot.hears('f', async (ctx) => {
-  console.log('hears f -> OK');
-  await ctx.reply('OK (f)');
+// ---- Тест-хендлер
+bot.on(message('text'), async (ctx, next) => {
+  const text = ctx.message.text || '';
+  if (text === 'f') {
+    console.log('TEST hears f -> OK');
+    await ctx.reply('OK (f)');
+    return; // не йдемо далі
+  }
+  return next();
 });
 
-// ---- Main handler (fires only on trigger)
-bot.hears(TRIGGER_RE, async (ctx) => {
+// ---- Основний хендлер (тільки текст)
+bot.on(message('text'), async (ctx) => {
   const chatId = String(ctx.chat.id);
+  const raw = ctx.message.text || '';
 
-  if (busyByChat.get(chatId)) {
-    await ctx.reply('⚠️ Я зайнятий, вже відповідаю іншому. Спробуй трохи пізніше 🙏');
+  const match = raw.match(TRIGGER_RE);
+  if (!match) {
+    // не тригер — ігноруємо
     return;
   }
 
-  const raw = ctx.message?.text ?? '';
+  // Прибрали "Чат"/"Кріш" + розділювачі після
   const cleaned = raw.replace(TRIGGER_RE, '').trim();
-  if (!cleaned) return;
+  console.log('trigger matched, cleaned =', cleaned);
+
+  if (!cleaned) {
+    // якщо користувач написав тільки "Чат" — нічого не шлемо
+    return;
+  }
+
+  if (busyByChat.get(chatId)) {
+    await ctx.reply('⚠️ Я зайнятий, вже відповідаю іншому. Спробуй трохи пізніше 🙏', {
+      reply_to_message_id: ctx.message.message_id
+    });
+    return;
+  }
 
   try {
     busyByChat.set(chatId, true);
@@ -105,40 +128,39 @@ bot.hears(TRIGGER_RE, async (ctx) => {
     };
 
     const payload = {
-      input_value: cleaned,           // без "Чат/Кріш"
-      session_id: chatId,             // контекст по чату/групі
+      input_value: cleaned,   // без "Чат/Кріш"
+      session_id: chatId,     // контекст по чату/групі
       input_type: 'chat',
       output_type: 'chat',
-      // Можна підсунути системну інструкцію через tweaks:
-      // tweaks: { "SystemMessage": { "content": "Відповідай українською... не представляйся Кріштіану Роналду тощо." } }
+      // tweaks: { "SystemMessage": { "content": "Відповідай українською, не представляйся Кріштіану Роналду..." } }
     };
 
     const { data } = await axios.post(url, payload, { headers });
-    const answer = extractAnswer(data);
+    const answer = extractAnswer(data) || '🤖 (порожня відповідь)';
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message);
-    await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈');
+    await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈', {
+      reply_to_message_id: ctx.message.message_id
+    });
   } finally {
     busyByChat.set(chatId, false);
   }
 });
 
-// ---- Boot in webhook mode (Railway)
+// ---- Запуск (тільки webhook, без polling)
 let server;
 async function boot() {
   server = app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
 
   const fullWebhook = `${CLEAN_PUBLIC_URL}${webhookPath}`;
 
-  // Оновлюємо вебхук на поточний URL (корисно при релізах)
   await bot.telegram.setWebhook(fullWebhook, {
-    drop_pending_updates: false, // або true, якщо хочеш чистити чергу при деплої
+    drop_pending_updates: false,
     allowed_updates: ['message'] // нам потрібні тільки текстові повідомлення
   });
   console.log('Webhook set ->', fullWebhook);
 
-  // Лог стану вебхука
   try {
     const info = await bot.telegram.getWebhookInfo();
     console.log('Webhook info:', info);
