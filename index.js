@@ -62,7 +62,9 @@ const TRIGGER_RE = /^\s*(чат|кріш)\b[\s,:-]*/iu;
 
 // прапор "зайнятий" на рівні всього бота
 let isBusy = false;
-
+bot.hears('f', async (ctx) => {
+  console.log('dd')
+})
 // Бот реагує тільки на повідомлення, які починаються з "Чат"/"Кріш"
 bot.hears(TRIGGER_RE, async (ctx) => {
   if (isBusy) {
