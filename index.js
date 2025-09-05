@@ -26,21 +26,21 @@ if (!CLEAN_PUBLIC_URL) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
-// ВАЖЛИВО: вимикаємо "webhook reply", щоб відповідати через sendMessage
+// важливо: відповідаємо звичайним sendMessage, а не через webhook HTTP-відповідь
 bot.telegram.webhookReply = false;
 
 const app = express();
 
-// ---- Health (для Railway)
+// Health (для Railway)
 app.get('/', (_, res) => res.status(200).send('OK'));
 app.get('/healthz', (_, res) => res.status(200).send('OK'));
 
-// ---- Webhook endpoint (шлях має збігатися з setWebhook)
+// Webhook endpoint (шлях має збігатися з setWebhook)
 const webhookPath = `/telegraf/${WEBHOOK_SECRET}`;
 app.use(express.json());
 app.use(bot.webhookCallback(webhookPath));
 
-// ---- Логування апдейтів
+// Логи апдейтів
 bot.use(async (ctx, next) => {
   const txt = ctx.update?.message?.text;
   console.log('update:', ctx.updateType, txt || '');
@@ -51,14 +51,14 @@ bot.catch((err, ctx) => {
   console.error('Telegraf error for', ctx.updateType, err);
 });
 
-// ---- /start
+// /start
 bot.start(async (ctx) => {
   await ctx.reply(
     'Привіт! Починай повідомлення зі слова "Чат" або "Кріш". Напр.: "Кріш як твій настрій".'
   );
 });
 
-// ---- Дістаємо текст з відповіді Langflow
+// Дістаємо текст із відповіді Langflow
 function extractAnswer(data) {
   try {
     const outputs = data?.outputs?.[0]?.outputs;
@@ -73,42 +73,39 @@ function extractAnswer(data) {
   return '🤖 (порожня відповідь)';
 }
 
-// ---- Тригер: ПОЧАТОК рядка "чат"/"кріш" (без регістру)
-const TRIGGER_RE = /^\s*(чат|кріш)\b[\s,:-]*/iu;
+// Тригер (ЮНІКОД, без \b): рядок ПОЧИНАЄТЬСЯ з "чат"/"кріш", далі пробіл/пунктуація або кінець рядка
+const TRIGGER_RE = /^\s*(?:чат|кріш)(?=[\s,.:;!?-]|$)/iu;
 
-// ---- Захист від конкурентних запитів (на рівні чату)
+// Захист від конкурентних запитів (на рівні чату)
 const busyByChat = new Map(); // chatId -> boolean
 
-// ---- Тест-хендлер
+// Тест-хендлер
 bot.on(message('text'), async (ctx, next) => {
   const text = ctx.message.text || '';
   if (text === 'f') {
     console.log('TEST hears f -> OK');
     await ctx.reply('OK (f)');
-    return; // не йдемо далі
+    return;
   }
   return next();
 });
 
-// ---- Основний хендлер (тільки текст)
+// Основний хендлер (тільки текст)
 bot.on(message('text'), async (ctx) => {
   const chatId = String(ctx.chat.id);
   const raw = ctx.message.text || '';
 
   const match = raw.match(TRIGGER_RE);
-  if (!match) {
-    // не тригер — ігноруємо
-    return;
-  }
+  if (!match) return; // не тригер — ігноруємо
 
-  // Прибрали "Чат"/"Кріш" + розділювачі після
-  const cleaned = raw.replace(TRIGGER_RE, '').trim();
+  // Прибираємо слово-тригер, а потім розділювачі/пробіли після нього
+  const cleaned = raw
+    .replace(TRIGGER_RE, '')
+    .replace(/^[\s,.:;!?-]+/, '')
+    .trim();
+
   console.log('trigger matched, cleaned =', cleaned);
-
-  if (!cleaned) {
-    // якщо користувач написав тільки "Чат" — нічого не шлемо
-    return;
-  }
+  if (!cleaned) return;
 
   if (busyByChat.get(chatId)) {
     await ctx.reply('⚠️ Я зайнятий, вже відповідаю іншому. Спробуй трохи пізніше 🙏', {
@@ -128,8 +125,8 @@ bot.on(message('text'), async (ctx) => {
     };
 
     const payload = {
-      input_value: cleaned,   // без "Чат/Кріш"
-      session_id: chatId,     // контекст по чату/групі
+      input_value: cleaned,       // без "Чат/Кріш"
+      session_id: chatId,         // контекст по чату/групі
       input_type: 'chat',
       output_type: 'chat',
       // tweaks: { "SystemMessage": { "content": "Відповідай українською, не представляйся Кріштіану Роналду..." } }
@@ -148,16 +145,15 @@ bot.on(message('text'), async (ctx) => {
   }
 });
 
-// ---- Запуск (тільки webhook, без polling)
+// Запуск (webhook only)
 let server;
 async function boot() {
   server = app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
 
   const fullWebhook = `${CLEAN_PUBLIC_URL}${webhookPath}`;
-
   await bot.telegram.setWebhook(fullWebhook, {
     drop_pending_updates: false,
-    allowed_updates: ['message'] // нам потрібні тільки текстові повідомлення
+    allowed_updates: ['message']
   });
   console.log('Webhook set ->', fullWebhook);
 
