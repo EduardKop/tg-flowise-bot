@@ -161,7 +161,7 @@ bot.on(message('text'), async (ctx) => {
       ...(LANGFLOW_API_KEY ? { 'x-api-key': LANGFLOW_API_KEY } : {})
     };
 
-    // --- НОВЕ: формуємо sender та sender_name для Chat Input Langflow
+    // --- Формуємо sender/sender_name
     const tg = ctx.from || {};
     const sender =
       tg.username
@@ -173,13 +173,22 @@ bot.on(message('text'), async (ctx) => {
       tg.username ||
       'Unknown';
 
+    // --- ВАЖЛИВО: передаємо ці значення у tweaks для вузла "Chat Input"
     const payload = {
       input_value: cleaned,
-      session_id: String(chatId), // краще явно як рядок
+      session_id: String(chatId),
       input_type: 'chat',
       output_type: 'chat',
-      sender,       // обовʼязково для Langflow Chat Input
-      sender_name,  // обовʼязково для Langflow Chat Input
+      // дублюємо і на верхньому рівні (не завадить)
+      sender,
+      sender_name,
+      tweaks: {
+        // ключ має відповідати назві вузла в Langflow (у тебе на скріні саме "Chat Input")
+        'Chat Input': {
+          sender,
+          sender_name
+        }
+      }
     };
 
     const { data } = await axios.post(url, payload, { headers });
