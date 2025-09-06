@@ -26,29 +26,34 @@ if (!CLEAN_PUBLIC_URL) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
-// Відповідаємо через sendMessage, а не webhook HTTP-відповідь
+// відповіді через sendMessage
 bot.telegram.webhookReply = false;
 
 const app = express();
 
-// Health (для Railway)
+// Health
 app.get('/', (_, res) => res.status(200).send('OK'));
 app.get('/healthz', (_, res) => res.status(200).send('OK'));
 
-// --- Власний webhook-роут: повертаємо 200 ОДРАЗУ, обробку запускаємо асинхронно
+// --- власний webhook-роут: 200 одразу, обробка асинхронно
 const webhookPath = `/telegraf/${WEBHOOK_SECRET}`;
 app.post(webhookPath, express.json(), (req, res) => {
-  res.sendStatus(200); // миттєво
-  // обробляємо апдейт паралельно
+  res.sendStatus(200);
   Promise.resolve(bot.handleUpdate(req.body)).catch((e) =>
     console.error('handleUpdate error:', e)
   );
 });
 
-// Логи апдейтів
+// ----- ЛОГИ: показуємо chatId, тип, thread, fromId і текст
 bot.use(async (ctx, next) => {
-  const txt = ctx.update?.message?.text;
-  console.log('update:', ctx.updateType, txt || '');
+  const txt = ctx.update?.message?.text || '';
+  const chatId = ctx.chat?.id;
+  const chatType = ctx.chat?.type;
+  const threadId = ctx.message?.message_thread_id;
+  const fromId = ctx.from?.id;
+  console.log(
+    `update: ${ctx.updateType} chatId=${chatId} type=${chatType} thread=${threadId ?? '-'} from=${fromId} text="${txt}"`
+  );
   return next();
 });
 
@@ -63,7 +68,7 @@ bot.start(async (ctx) => {
   );
 });
 
-// Дістаємо текст із відповіді Langflow
+// дістаємо текст із відповіді Langflow
 function extractAnswer(data) {
   try {
     const outputs = data?.outputs?.[0]?.outputs;
@@ -78,24 +83,24 @@ function extractAnswer(data) {
   return '🤖 (порожня відповідь)';
 }
 
-// Тригер (ЮНІКОД, без \b): початок рядка "чат"/"кріш"
+// тригер (юнікод, без \b): початок рядка "чат"/"кріш"
 const TRIGGER_RE = /^\s*(?:чат|кріш)(?=[\s,.:;!?-]|$)/iu;
 
-// Захист від конкурентних запитів на рівні чату
+// захист від конкурентних запитів (по чату)
 const busyByChat = new Map(); // chatId -> true/false
-const BUSY_RESET_MS = 120_000; // авто-скидання на випадок зависань
+const BUSY_RESET_MS = 120_000;
 
-// Тест
+// тест
 bot.on(message('text'), async (ctx, next) => {
   if ((ctx.message.text || '') === 'f') {
-    console.log('TEST hears f -> OK');
+    console.log(`TEST hears f -> OK (chatId=${ctx.chat?.id})`);
     await ctx.reply('OK (f)');
     return;
   }
   return next();
 });
 
-// Основний хендлер
+// основний хендлер
 bot.on(message('text'), async (ctx) => {
   const chatId = String(ctx.chat.id);
   const raw = ctx.message.text || '';
@@ -107,10 +112,11 @@ bot.on(message('text'), async (ctx) => {
     .replace(/^[\s,.:;!?-]+/, '')
     .trim();
 
-  console.log('trigger matched, cleaned =', cleaned);
+  console.log(`trigger matched (chatId=${chatId}), cleaned="${cleaned}"`);
   if (!cleaned) return;
 
   if (busyByChat.get(chatId)) {
+    console.log(`busy reply -> chatId=${chatId}`);
     await ctx.reply('⚠️ Я зайнятий, вже відповідаю іншому. Спробуй трохи пізніше 🙏', {
       reply_to_message_id: ctx.message.message_id
     });
@@ -130,18 +136,19 @@ bot.on(message('text'), async (ctx) => {
     };
 
     const payload = {
-      input_value: cleaned,   // без "Чат/Кріш"
-      session_id: chatId,     // контекст по чату/групі
+      input_value: cleaned,
+      session_id: chatId,
       input_type: 'chat',
       output_type: 'chat',
-      // tweaks: { "SystemMessage": { "content": "Відповідай українською, не представляйся Кріштіану Роналду..." } }
     };
 
     const { data } = await axios.post(url, payload, { headers });
     const answer = extractAnswer(data) || '🤖 (порожня відповідь)';
+
+    console.log(`reply -> chatId=${chatId}, length=${answer.length}`);
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
-    console.error('Langflow error:', err?.response?.data || err.message);
+    console.error('Langflow error:', err?.response?.data || err.message, `(chatId=${chatId})`);
     await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈', {
       reply_to_message_id: ctx.message.message_id
     });
@@ -151,7 +158,7 @@ bot.on(message('text'), async (ctx) => {
   }
 });
 
-// Запуск (webhook only)
+// запуск (webhook only)
 let server;
 async function boot() {
   server = app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
