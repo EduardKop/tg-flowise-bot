@@ -161,11 +161,25 @@ bot.on(message('text'), async (ctx) => {
       ...(LANGFLOW_API_KEY ? { 'x-api-key': LANGFLOW_API_KEY } : {})
     };
 
+    // --- НОВЕ: формуємо sender та sender_name для Chat Input Langflow
+    const tg = ctx.from || {};
+    const sender =
+      tg.username
+        ? `@${tg.username}`
+        : (tg.first_name || tg.last_name ? 'User' : 'Anonymous');
+
+    const sender_name =
+      [tg.first_name, tg.last_name].filter(Boolean).join(' ') ||
+      tg.username ||
+      'Unknown';
+
     const payload = {
       input_value: cleaned,
-      session_id: chatId,
+      session_id: String(chatId), // краще явно як рядок
       input_type: 'chat',
       output_type: 'chat',
+      sender,       // обовʼязково для Langflow Chat Input
+      sender_name,  // обовʼязково для Langflow Chat Input
     };
 
     const { data } = await axios.post(url, payload, { headers });
@@ -175,7 +189,7 @@ bot.on(message('text'), async (ctx) => {
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message, `(chatId=${chatId})`);
-    await ctx.reply('Ой, сталася помилка - мене обновляє Едуард', {
+    await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈', {
       reply_to_message_id: ctx.message.message_id
     });
   } finally {
