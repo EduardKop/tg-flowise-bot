@@ -167,24 +167,23 @@ bot.on(message('text'), async (ctx) => {
     const sender_name = humanName || tg.username || `user_${userId}`;
     const sender = tg.username ? `@${tg.username}` : (humanName || 'User');
 
-    // --- ВАЖЛИВО: передаємо значення у обидва вузли — "Chat Input" і "Name"
+    // --- ПЕРЕДАЄМО значення у вузли "Chat Input" і "Name".
+    // ВАЖЛИВО: НЕ передаємо input_value у tweaks['Chat Input'], щоб уникнути конфлікту.
     const payload = {
-      input_value: cleaned,
+      input_value: cleaned,              // <-- тільки тут
       session_id: String(chatId),
       input_type: 'chat',
       output_type: 'chat',
-      // дублюємо і на верхньому рівні — деякі білди це читають
       sender,
       sender_name,
       tweaks: {
-        // ключі мають 1-в-1 збігатися з назвами вузлів у твоєму флоу
         'Chat Input': {
           sender,
-          sender_name,      // може бути проігнорований, якщо поле підключене зовні — але не завадить
-          input_value: cleaned
+          sender_name
+          // НЕ додавати input_value тут!
         },
         'Name': {
-          text: sender_name // це і є Text Input, що фідає в Sender Name
+          text: sender_name
         }
       }
     };
@@ -196,7 +195,7 @@ bot.on(message('text'), async (ctx) => {
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message, `(chatId=${chatId})`);
-    await ctx.reply('Ой, сталася помилка - мене одновляє Едіч 🙈', {
+    await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈', {
       reply_to_message_id: ctx.message.message_id
     });
   } finally {
