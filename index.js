@@ -3,6 +3,7 @@ import express from 'express';
 import { Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
 import axios from 'axios';
+import { ALLOWED_CHATS, ALLOWED_USERS } from './access.js';
 
 const {
   BOT_TOKEN,
@@ -26,7 +27,7 @@ if (!CLEAN_PUBLIC_URL) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
-// відповіді через sendMessage
+// відповіді через sendMessage (а не webhook HTTP-відповідь)
 bot.telegram.webhookReply = false;
 
 const app = express();
@@ -44,7 +45,7 @@ app.post(webhookPath, express.json(), (req, res) => {
   );
 });
 
-// ----- ЛОГИ: показуємо chatId, тип, thread, fromId і текст
+// ----- ЛОГИ: показуємо chatId, type, thread, fromId і текст
 bot.use(async (ctx, next) => {
   const txt = ctx.update?.message?.text || '';
   const chatId = ctx.chat?.id;
@@ -90,7 +91,22 @@ const TRIGGER_RE = /^\s*(?:чат|кріш)(?=[\s,.:;!?-]|$)/iu;
 const busyByChat = new Map(); // chatId -> true/false
 const BUSY_RESET_MS = 120_000;
 
-// тест
+// --- КОМАНДА "id" (ДОСТУПНА ВСЮДИ, БЕЗ ДОЗВОЛІВ)
+bot.on(message('text'), async (ctx, next) => {
+  const text = (ctx.message.text || '').trim().toLowerCase();
+  if (text === 'id') {
+    const chatId = String(ctx.chat.id);
+    const fromId = String(ctx.from.id);
+    const chatType = ctx.chat.type;
+    const threadId = ctx.message?.message_thread_id;
+    console.log(`[id] chatId=${chatId} type=${chatType} thread=${threadId ?? '-'} from=${fromId}`);
+    await ctx.reply(`chatId: ${chatId}\nfromId: ${fromId}`);
+    return; // не йдемо далі
+  }
+  return next();
+});
+
+// тест (опційно)
 bot.on(message('text'), async (ctx, next) => {
   if ((ctx.message.text || '') === 'f') {
     console.log(`TEST hears f -> OK (chatId=${ctx.chat?.id})`);
@@ -103,9 +119,19 @@ bot.on(message('text'), async (ctx, next) => {
 // основний хендлер
 bot.on(message('text'), async (ctx) => {
   const chatId = String(ctx.chat.id);
+  const userId = String(ctx.from.id);
   const raw = ctx.message.text || '';
 
+  // реагуємо тільки на "чат/кріш" на початку
   if (!TRIGGER_RE.test(raw)) return;
+
+  // ---- ДОСТУП: тільки якщо chatId у ALLOWED_CHATS АБО userId у ALLOWED_USERS
+  const isAllowed = ALLOWED_CHATS.has(chatId) || ALLOWED_USERS.has(userId);
+  if (!isAllowed) {
+    console.log(`blocked: chatId=${chatId} userId=${userId}`);
+    await ctx.reply('Бот поки працює виключно у шаразі.');
+    return;
+  }
 
   const cleaned = raw
     .replace(TRIGGER_RE, '')
