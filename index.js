@@ -163,30 +163,28 @@ bot.on(message('text'), async (ctx) => {
 
     // --- Формуємо sender/sender_name
     const tg = ctx.from || {};
-    const sender =
-      tg.username
-        ? `@${tg.username}`
-        : (tg.first_name || tg.last_name ? 'User' : 'Anonymous');
+    const humanName = [tg.first_name, tg.last_name].filter(Boolean).join(' ').trim();
+    const sender_name = humanName || tg.username || `user_${userId}`;
+    const sender = tg.username ? `@${tg.username}` : (humanName || 'User');
 
-    const sender_name =
-      [tg.first_name, tg.last_name].filter(Boolean).join(' ') ||
-      tg.username ||
-      'Unknown';
-
-    // --- ВАЖЛИВО: передаємо ці значення у tweaks для вузла "Chat Input"
+    // --- ВАЖЛИВО: передаємо значення у обидва вузли — "Chat Input" і "Name"
     const payload = {
       input_value: cleaned,
       session_id: String(chatId),
       input_type: 'chat',
       output_type: 'chat',
-      // дублюємо і на верхньому рівні (не завадить)
+      // дублюємо і на верхньому рівні — деякі білди це читають
       sender,
       sender_name,
       tweaks: {
-        // ключ має відповідати назві вузла в Langflow (у тебе на скріні саме "Chat Input")
+        // ключі мають 1-в-1 збігатися з назвами вузлів у твоєму флоу
         'Chat Input': {
           sender,
-          sender_name
+          sender_name,      // може бути проігнорований, якщо поле підключене зовні — але не завадить
+          input_value: cleaned
+        },
+        'Name': {
+          text: sender_name // це і є Text Input, що фідає в Sender Name
         }
       }
     };
@@ -198,7 +196,7 @@ bot.on(message('text'), async (ctx) => {
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message, `(chatId=${chatId})`);
-    await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈', {
+    await ctx.reply('Ой, сталася помилка - мене одновляє Едіч 🙈', {
       reply_to_message_id: ctx.message.message_id
     });
   } finally {
