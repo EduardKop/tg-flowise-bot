@@ -175,7 +175,7 @@ bot.on(message('text'), async (ctx) => {
     await ctx.reply(answer, { reply_to_message_id: ctx.message.message_id });
   } catch (err) {
     console.error('Langflow error:', err?.response?.data || err.message, `(chatId=${chatId})`);
-    await ctx.reply('Ой, сталася помилка під час звернення до Langflow 🙈', {
+    await ctx.reply('Ой, сталася помилка - мене обновляє Едуард', {
       reply_to_message_id: ctx.message.message_id
     });
   } finally {
