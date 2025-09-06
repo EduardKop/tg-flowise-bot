@@ -6,5 +6,5 @@ export const ALLOWED_CHATS = new Set([
 
 
 export const ALLOWED_USERS = new Set([
-  // '123456789',
+  '378367201',
 ]);
